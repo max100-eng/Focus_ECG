@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Análisis de ECG con IA</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script async src="https://docs.opencv.org/4.x/opencv.js" onload="onOpenCvReady();"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.org/css2?family=Inter:wght@400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .glass-effect {
+            backdrop-filter: blur(10px);
+            background-color: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        @keyframes pulse-border {
+            0%, 100% { border-color: rgba(102, 255, 204, 0.4); }
+            50% { border-color: rgba(102, 255, 204, 0.9); }
+        }
+        .animate-pulse-border {
+            animation: pulse-border 1.5s infinite ease-in-out;
+        }
+        #ecg-table th, #ecg-table td {
+            padding: 0.75rem;
+        }
+        #file-upload {
+            display: none;
+        }
+        .camera-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            animation: fadeIn 0.3s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        .framing-guide {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+        }
+        .framing-window {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 90%;
+            max-width: 400px;
+            height: auto;
+            max-height: 700px;
+            aspect-ratio: 1 / 2;
+            border: 2px solid #ef4444;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.6);
+            border-radius: 12px;
+        }
+        .framing-text {
+            position: absolute;
+            top: calc(50% - 210px);
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.7);
+            text-align: center;
+            font-size: 0.9rem;
+            width: 90%;
+        }
+        /* Nueva regla para mover los botones fuera del recuadro */
+        .camera-controls {
+            position: absolute;
+            bottom: 0;
+            width: 100%;
+            padding: 24px;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-200 flex items-center justify-center min-h-screen p-4">
+    <div class="glass-effect rounded-3xl shadow-2xl p-6 md:p-10 max-w-7xl w-full flex flex-col lg:flex-row gap-6 lg:gap-10">
+        <div class="lg:w-1/2 flex flex-col gap-6 lg:gap-8">
+            <h1 class="text-4xl md:text-5xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-teal-400 to-blue-500 text-center lg:text-left">Análisis de ECG</h1>
+            
+            <p class="text-lg text-slate-300 text-center lg:text-left">
+                Sube una imagen o usa la cámara para analizar un electrocardiograma. La IA te proporcionará un resumen detallado y las mediciones principales.
+            </p>
+
+            <div class="bg-yellow-800 bg-opacity-30 border-2 border-yellow-700 p-4 rounded-xl flex items-start gap-3">
+                <i data-lucide="alert-triangle" class="h-6 w-6 text-yellow-400 flex-shrink-0 mt-1"></i>
+                <div class="flex flex-col gap-1">
+                    <h4 class="font-bold text-yellow-300">AVISO IMPORTANTE:</h4>
+                    <p class="text-sm text-yellow-200">
+                        Este análisis es **solo para fines informativos** y no constituye un diagnóstico médico. Siempre consulta a un profesional de la salud calificado para una interpretación precisa de cualquier dato médico.
+                    </p>
+                </div>
+            </div>
+
+            <div class="flex flex-col gap-4">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <label for="file-upload" class="flex items-center justify-center gap-3 p-4 bg-gradient-to-br from-blue-600 to-indigo-700 text-white font-semibold rounded-xl cursor-pointer shadow-lg hover:from-blue-700 hover:to-indigo-800 transition-all duration-300 transform hover:-translate-y-1">
+                        <i data-lucide="upload" class="h-5 w-5"></i>
+                        Subir Imagen
+                    </label>
+                    <input id="file-upload" type="file" accept="image/*" onchange="handleFileUpload(event)">
+                    
+                    <button onclick="startCamera()" class="flex items-center justify-center gap-3 p-4 bg-gradient-to-br from-teal-600 to-green-700 text-white font-semibold rounded-xl cursor-pointer shadow-lg hover:from-teal-700 hover:to-green-800 transition-all duration-300 transform hover:-translate-y-1">
+                        <i data-lucide="camera" class="h-5 w-5"></i>
+                        Tomar Foto
+                    </button>
+                </div>
+
+                <div class="flex flex-col sm:flex-row items-center gap-2 p-3 bg-gray-800 rounded-xl">
+                    <i data-lucide="link" class="h-5 w-5 text-gray-400 flex-shrink-0"></i>
+                    <input id="image-url-input" type="text" placeholder="...o introduce la URL de una imagen" class="flex-grow p-2 bg-transparent border border-gray-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-400">
+                    <button onclick="handleUrlUpload()" class="w-full sm:w-auto mt-2 sm:mt-0 p-2 px-4 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
+                        Analizar
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="lg:w-1/2 flex flex-col gap-6">
+            <div id="image-preview" class="w-full h-64 md:h-80 lg:h-96 glass-effect rounded-xl flex items-center justify-center text-gray-400 overflow-hidden relative border-2 border-dashed border-gray-600">
+                <i id="camera-icon" data-lucide="camera" class="h-16 w-16"></i>
+                <img id="uploaded-image" class="absolute inset-0 w-full h-full object-contain p-2 hidden" alt="Vista previa de la imagen">
+            </div>
+            
+            <div id="results" class="flex flex-col gap-4 p-6 glass-effect rounded-xl h-full overflow-y-auto">
+                <h3 class="text-2xl font-bold text-teal-400">Resultados del análisis:</h3>
+                <div id="loading-spinner" class="hidden flex-col items-center justify-center p-4">
+                    <div class="animate-spin rounded-full h-10 w-10 border-b-2 border-teal-500"></div>
+                    <p class="mt-4 text-sm text-slate-400">Analizando la imagen...</p>
+                </div>
+                <p id="ai-response-text" class="text-slate-300 leading-relaxed"></p>
+
+                <div id="analysis-data" class="hidden flex-col gap-4">
+                    <div class="flex flex-col gap-2">
+                        <h4 class="text-xl font-bold text-teal-300">Mediciones del ECG</h4>
+                        <table id="ecg-table" class="w-full text-left rounded-lg overflow-hidden border border-gray-700"></table>
+                    </div>
+                    
+                    <div class="flex flex-col gap-2">
+                        <h4 class="text-xl font-bold text-teal-300">Representación Gráfica</h4>
+                        <div id="ecg-graph-container" class="w-full h-40 bg-gray-800 rounded-lg p-2 relative">
+                            <canvas id="ecg-chart"></canvas>
+                        </div>
+                    </div>
+
+                    <div id="action-buttons" class="mt-4 flex flex-col sm:flex-row gap-4">
+                        <button onclick="downloadImage()" class="flex-grow flex items-center justify-center gap-2 p-3 bg-indigo-600 text-white font-semibold rounded-lg hover:bg-indigo-700 transition-colors">
+                            <i data-lucide="download" class="h-5 w-5"></i> Descargar Imagen Original
+                        </button>
+                        <button onclick="shareAnalysis()" class="flex-grow flex items-center justify-center gap-2 p-3 bg-green-600 text-white font-semibold rounded-lg hover:bg-green-700 transition-colors">
+                            <i data-lucide="share-2" class="h-5 w-5"></i> Compartir Análisis
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="camera-overlay" class="camera-overlay hidden">
+        <div class="relative w-full h-full flex flex-col items-center">
+            <video id="camera-feed" class="w-full h-full object-cover" autoplay playsinline></video>
+            <canvas id="camera-canvas" class="hidden"></canvas>
+            
+            <div id="framing-guide" class="framing-guide">
+                <div class="framing-window"></div>
+                <div class="framing-text">Encuadra el ECG dentro del recuadro para una mejor precisión.</div>
+            </div>
+
+            <div class="camera-controls">
+                <button onclick="takePhoto()" class="flex items-center justify-center gap-2 p-4 px-6 bg-green-500 text-white rounded-full shadow-lg hover:bg-green-600 transition-colors">
+                    <i data-lucide="camera" class="h-6 w-6"></i>
+                    <span>Tomar Foto</span>
+                </button>
+                <button onclick="stopCamera()" class="flex items-center justify-center p-4 px-6 bg-red-500 text-white rounded-full shadow-lg hover:bg-red-600 transition-colors gap-2">
+                    <i data-lucide="x" class="h-6 w-6"></i>
+                    <span>Cancelar</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Declaración de variables que referencian elementos del DOM
+        const uploadedImage = document.getElementById('uploaded-image');
+        const imagePreview = document.getElementById('image-preview');
+        const cameraIcon = document.getElementById('camera-icon');
+        const aiResponseText = document.getElementById('ai-response-text');
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const urlInput = document.getElementById('image-url-input');
+        const fileUpload = document.getElementById('file-upload');
+        const analysisData = document.getElementById('analysis-data');
+        const ecgTable = document.getElementById('ecg-table');
+        const ecgChartCanvas = document.getElementById('ecg-chart');
+        
+        let ecgChart = null;
+        
+        // Elementos del visor de la cámara
+        const cameraOverlay = document.getElementById('camera-overlay');
+        const cameraFeed = document.getElementById('camera-feed');
+        const cameraCanvas = document.getElementById('camera-canvas');
+        let stream;
+        
+        let cv = null;
+
+        function onOpenCvReady() {
+            cv = window.cv;
+            console.log("OpenCV.js está cargado y listo.");
+            lucide.createIcons();
+        }
+
+        function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    displayImageAndAnalyze(e.target.result, file.type);
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        function handleUrlUpload() {
+            const url = urlInput.value.trim();
+            if (url) {
+                fetch(url)
+                    .then(response => {
+                        if (!response.ok) {
+                            throw new Error(`Error HTTP: ${response.status}`);
+                        }
+                        return response.blob();
+                    })
+                    .then(blob => {
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                            displayImageAndAnalyze(reader.result, blob.type);
+                        };
+                        reader.readAsDataURL(blob);
+                    })
+                    .catch(error => {
+                        aiResponseText.textContent = `Error al cargar la imagen desde la URL: ${error.message}. Por favor, revisa la URL.`;
+                        console.error('Error fetching image from URL:', error);
+                    });
+            } else {
+                aiResponseText.textContent = 'Por favor, introduce una URL válida.';
+            }
+        }
+
+        async function startCamera() {
+            if (!cv) {
+                alert("OpenCV.js no se ha cargado. Por favor, recarga la página.");
+                return;
+            }
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+                cameraFeed.srcObject = stream;
+                cameraOverlay.classList.remove('hidden');
+            } catch (err) {
+                aiResponseText.textContent = 'No se pudo acceder a la cámara. Por favor, asegúrate de haber dado permiso.';
+                console.error('Error al acceder a la cámara:', err);
+            }
+        }
+
+        function stopCamera() {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+                cameraOverlay.classList.add('hidden');
+            }
+        }
+        
+        async function takePhoto() {
+            const context = cameraCanvas.getContext('2d');
+            cameraCanvas.width = cameraFeed.videoWidth;
+            cameraCanvas.height = cameraFeed.videoHeight;
+            context.drawImage(cameraFeed, 0, 0, cameraCanvas.width, cameraCanvas.height);
+            const processedImage = await processECGImage(cameraCanvas);
+            stopCamera();
+            displayImageAndAnalyze(processedImage, 'image/jpeg');
+        }
+
+        function downloadImage() {
+            const imageUrl = uploadedImage.src;
+            const a = document.createElement('a');
+            a.href = imageUrl;
+            a.download = 'ecg_analisis_original.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+        
+        async function shareAnalysis() {
+            if (!navigator.share) {
+                alert('La función de compartir no está disponible en este navegador.');
+                return;
+            }
+            
+            const responseText = aiResponseText.textContent;
+            const chartCanvas = document.getElementById('ecg-chart');
+            
+            if (!responseText || !chartCanvas) {
+                alert('No hay resultados o gráfico para compartir.');
+                return;
+            }
+
+            chartCanvas.toBlob(async (blob) => {
+                const file = new File([blob], 'ecg_analisis.png', { type: 'image/png' });
+
+                try {
+                    await navigator.share({
+                        files: [file],
+                        title: 'Análisis de ECG',
+                        text: `Análisis de ECG:\n\n${responseText}`,
+                    });
+                } catch (error) {
+                    console.error('Error al compartir:', error);
+                    alert('Error al compartir. Por favor, inténtalo de nuevo.');
+                }
+            }, 'image/png');
+        }
+
+        async function processECGImage(canvas) {
+            let src = cv.imread(canvas);
+            let dst = new cv.Mat();
+            let gray = new cv.Mat();
+
+            cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+            cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0, 0);
+            cv.Canny(gray, dst, 75, 200, 3);
+
+            let contours = new cv.MatVector();
+            let hierarchy = new cv.Mat();
+            cv.findContours(dst, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+            let biggestContour = null;
+            let maxArea = 0;
+
+            for (let i = 0; i < contours.size(); ++i) {
+                let contour = contours.get(i);
+                let area = cv.contourArea(contour);
+                if (area > maxArea) {
+                    let peri = cv.arcLength(contour, true);
+                    let approx = new cv.Mat();
+                    cv.approxPolyDP(contour, approx, 0.02 * peri, true);
+                    if (approx.rows === 4) {
+                        maxArea = area;
+                        biggestContour = approx;
+                    }
+                    approx.delete();
+                }
+                contour.delete();
+            }
+
+            let outputCanvas = document.createElement('canvas');
+
+            if (biggestContour) {
+                let rect = new cv.Mat(4, 1, cv.CV_32FC2);
+                let sortedPoints = sortContourPoints(biggestContour);
+
+                rect.data32F[0] = 0;
+                rect.data32F[1] = 0;
+                rect.data32F[2] = 500;
+                rect.data32F[3] = 0;
+                rect.data32F[4] = 500;
+                rect.data32F[5] = 300;
+                rect.data32F[6] = 0;
+                rect.data32F[7] = 300;
+
+                let dsize = new cv.Size(500, 300);
+                let M = cv.getPerspectiveTransform(sortedPoints, rect);
+
+                cv.warpPerspective(src, dst, M, dsize, cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
+
+                cv.imshow(outputCanvas, dst);
+
+                M.delete();
+                rect.delete();
+                dst.delete();
+            } else {
+                cv.imshow(outputCanvas, src);
+            }
+
+            src.delete();
+            gray.delete();
+            contours.delete();
+            hierarchy.delete();
+            if (biggestContour) biggestContour.delete();
+
+            return outputCanvas.toDataURL('image/jpeg');
+        }
+
+        function sortContourPoints(contour) {
+            let pts = [{ x: contour.data32S[0], y: contour.data32S[1] },
+                { x: contour.data32S[2], y: contour.data32S[3] },
+                { x: contour.data32S[4], y: contour.data32S[5] },
+                { x: contour.data32S[6], y: contour.data32S[7] }
+            ];
+
+            pts.sort((a, b) => a.y - b.y);
+
+            let topPts = pts.slice(0, 2);
+            let bottomPts = pts.slice(2, 4);
+
+            topPts.sort((a, b) => a.x - b.x);
+            bottomPts.sort((a, b) => a.x - b.x);
+
+            let sortedMat = new cv.Mat(4, 1, cv.CV_32FC2);
+            sortedMat.data32F[0] = topPts[0].x;
+            sortedMat.data32F[1] = topPts[0].y;
+            sortedMat.data32F[2] = topPts[1].x;
+            sortedMat.data32F[3] = topPts[1].y;
+            sortedMat.data32F[4] = bottomPts[1].x;
+            sortedMat.data32F[5] = bottomPts[1].y;
+            sortedMat.data32F[6] = bottomPts[0].x;
+            sortedMat.data32F[7] = bottomPts[0].y;
+
+            return sortedMat;
+        }
+
+        async function displayImageAndAnalyze(imageData, mimeType) {
+            uploadedImage.src = imageData;
+            uploadedImage.classList.remove('hidden');
+            cameraIcon.classList.add('hidden');
+
+            aiResponseText.textContent = "";
+            analysisData.classList.add('hidden');
+            imagePreview.classList.add('animate-pulse-border');
+            loadingSpinner.classList.remove('hidden');
+
+            const apiUrl = 'https://max100.pythonanywhere.com/analyze_ecg'
+            const payload = {
+                image_data: imageData
+            };
+
+            try {
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Error del servidor: ${response.status}. Detalles: ${errorText}`);
+                }
+
+                const result = await response.json();
+
+                displayResults(result);
+
+            } catch (error) {
+                aiResponseText.textContent = `Error en la conexión con el servidor de análisis: ${error.message}. Asegúrate de que el servidor está corriendo en const apiUrl = 'https://max100.pythonanywhere.com/analyze_ecg'.`;
+                console.error('Error al llamar al backend:', error);
+                analysisData.classList.add('hidden');
+            } finally {
+                imagePreview.classList.remove('animate-pulse-border');
+                loadingSpinner.classList.add('hidden');
+            }
+        }
+
+        function getColorForStatus(status) {
+            switch (status) {
+                case 'normal':
+                    return 'text-green-400';
+                case 'slightly_abnormal':
+                    return 'text-yellow-400';
+                case 'abnormal':
+                    return 'text-red-400';
+                default:
+                    return 'text-white';
+            }
+        }
+        
+        function displayResults(data) {
+            aiResponseText.innerHTML = `
+                <p class="mt-2"><strong>Hallazgos:</strong> ${data.findings}</p>
+                <p class="mt-2 text-yellow-300"><strong>Aviso:</strong> ${data.disclaimer}</p>
+            `;
+
+            let hasAbnormal = false;
+            let measurementsHtml = '';
+            for (const [key, value] of Object.entries(data.measurements)) {
+                const colorClass = getColorForStatus(value.status);
+                measurementsHtml += `
+                    <tr class="hover:bg-gray-800 transition-colors">
+                        <td class="p-3">${key.replace(/([A-Z])/g, ' $1').replace('BPM', ' (lpm)').replace('MS', ' (ms)').trim()}</td>
+                        <td class="p-3 ${colorClass}">${value.value ? value.value.toFixed(2) : 'N/A'}</td>
+                    </tr>
+                `;
+                if (value.status === 'abnormal' || value.status === 'slightly_abnormal') {
+                    hasAbnormal = true;
+                }
+            }
+
+            if (hasAbnormal) {
+                 aiResponseText.innerHTML += `<p class="mt-2 text-red-400 font-bold">¡Alerta! Se han detectado valores anormales. Por favor, consulta a un médico.</p>`;
+            }
+
+            analysisData.classList.remove('hidden');
+            ecgTable.innerHTML = `
+                <thead class="bg-gray-700 text-teal-400">
+                    <tr>
+                        <th class="p-3 font-semibold">Medición</th>
+                        <th class="p-3 font-semibold">Valor</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-700">
+                    ${measurementsHtml}
+                </tbody>
+            `;
+            
+            drawEcgChart(data.signalData);
+        }
+
+        function drawEcgChart(signalData) {
+            if (ecgChart) {
+                ecgChart.destroy();
+            }
+            
+            const labels = Array.from({length: signalData.length}, (_, i) => i);
+            const ctx = ecgChartCanvas.getContext('2d');
+            
+            ecgChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Señal de ECG',
+                        data: signalData,
+                        borderColor: '#22d3ee',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        tension: 0.4,
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: {
+                            display: false
+                        },
+                        y: {
+                            display: false
+                        }
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            callbacks: {
+                                label: function(context) {
+                                    let label = context.dataset.label || '';
+                                    if (label) {
+                                        label += ': ';
+                                    }
+                                    if (context.parsed.y !== null) {
+                                        label += context.parsed.y.toFixed(2);
+                                    }
+                                    return label;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
