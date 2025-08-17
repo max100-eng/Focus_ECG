@@ -4,7 +4,7 @@ from flask_cors import CORS
 import requests
 import json
 import base64
-
+import streamlit as st
 # Crea una instancia de la aplicación Flask
 app = Flask(__name__)
 # Habilita CORS para permitir solicitudes desde el frontend (tu archivo HTML)
@@ -88,4 +88,5 @@ def analizar_imagen():
 # Se ejecuta la aplicación Flask si el script se llama directamente
 if __name__ == '__main__':
     # Esto inicia el servidor en http://localhost:5000
+
     app.run(host='0.0.0.0', port=5000, debug=True)
